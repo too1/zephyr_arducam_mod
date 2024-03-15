@@ -15,7 +15,7 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(mega_camera);
 
-#define VIDEO_PATTERN_FPS 30
+#define VIDEO_PATTERN_FPS 1000
 
 #define ARDUCHIP_FIFO   0x04 /* FIFO and I2C control */
 #define ARDUCHIP_FIFO_2 0x07 /* FIFO and I2C control */
@@ -74,6 +74,13 @@ LOG_MODULE_REGISTER(mega_camera);
 #define CTR_WHITEBALANCE 0X02
 #define CTR_EXPOSURE     0X01
 #define CTR_GAIN         0X00
+
+#define AC_STACK_SIZE 4096
+#define AC_PRIORITY 5
+
+K_THREAD_STACK_DEFINE(ac_stack_area, AC_STACK_SIZE);
+
+struct k_work_q ac_work_q;
 
 /**
  * @struct mega_sdk_data
@@ -691,7 +698,7 @@ static int arducam_mega_stream_start(const struct device *dev)
 	drv_data->stream_on = 1;
 	drv_data->fifo_length = 0;
 
-	return k_work_schedule(&drv_data->buf_work, K_MSEC(33));
+	return k_work_schedule_for_queue(&ac_work_q, &drv_data->buf_work, K_MSEC(33));
 }
 
 static int arducam_mega_stream_stop(const struct device *dev)
@@ -796,7 +803,7 @@ static void __buffer_work(struct k_work *work)
 
 	vbuf = k_fifo_get(&drv_data->fifo_in, K_FOREVER);
 
-	k_work_reschedule(&drv_data->buf_work, K_MSEC(1000 / VIDEO_PATTERN_FPS));
+	k_work_reschedule_for_queue(&ac_work_q, &drv_data->buf_work, K_USEC(500));
 
 	if (vbuf == NULL) {
 		return;
@@ -975,6 +982,10 @@ static int arducam_mega_init(const struct device *dev)
 	drv_data->dev = dev;
 	k_fifo_init(&drv_data->fifo_in);
 	k_fifo_init(&drv_data->fifo_out);
+
+	k_work_queue_init(&ac_work_q);
+	k_work_queue_start(&ac_work_q, ac_stack_area, K_THREAD_STACK_SIZEOF(ac_stack_area), AC_PRIORITY, NULL);
+
 	k_work_init_delayable(&drv_data->buf_work, __buffer_work);
 
 	arducam_mega_soft_reset(dev);
